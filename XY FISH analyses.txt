@@ -1,0 +1,136 @@
+macro "find XY FISH Action Tool - C000 O02gf C0f0 V3655 Cf00 V7b44 T0206F " {
+	
+	//ask for file
+	path = File.openDialog("select MIP file");
+
+	//extract dir and basename
+	name = File.getName(path);
+	baseNameEnd=indexOf(name, " cyst MIP.tif");
+	baseName=substring(name, 0, baseNameEnd);
+	dir = File.directory();
+
+	//open MIP and nuclei ROIs
+	open(path);
+	open(dir + baseName +" nuclei ROIs.zip");
+
+	//enlarge all ROIs by 1 pixel
+	N=roiManager("count");
+	for (n=0; n<N ; n++) {
+		roiManager("Select", n);
+		run("Enlarge...", "enlarge=1 pixel");
+		roiManager("Update");
+		roiManager("Remove Channel Info");
+	}
+	roiManager("Deselect");
+	roiManager("Show All");
+
+	//ask for threshold in green channel
+	Stack.setChannel(2);
+	run("Threshold...");
+	waitForUser("adjust threshold and press OK");
+	
+	//find Y FISH signals and change ROI colors (blue for no signal, green for signal)
+	N=roiManager("count");
+	for (n=0; n<N ; n++) {
+		roiManager("Select", n);
+		run("Analyze Particles...", "size=10-500 pixel circularity=0.1-1.00 display slice");
+		if(nResults == 0){
+			roiManager("Select", n);
+			roiManager("Set Color", "blue");
+		}
+		else if(nResults > 0){
+			roiManager("Select", n);
+			roiManager("Set Color", "green");
+		}
+		run("Clear Results");
+	}
+	roiManager("Deselect");
+	resetThreshold();
+
+	//ask for threshold in red channel
+	Stack.setChannel(3);
+	run("Threshold...");
+	waitForUser("adjust threshold and press OK");
+	
+	//find Y FISH signals and change ROI colors (blue for no signal, green for Y signal, red for X signal, white for both)
+	N=roiManager("count");
+	for (n=0; n<N ; n++) {
+		roiManager("Select", n);
+		color = getInfo("selection.color");
+		run("Analyze Particles...", "size=10-500 pixel circularity=0.1-1.00 display slice");
+		if(nResults > 0 && color == "blue"){
+			roiManager("Select", n);
+			roiManager("Set Color", "red");
+		}
+		else if(nResults > 0 && color == "green"){
+			roiManager("Select", n);
+			roiManager("Set Color", "white");
+		}
+		run("Clear Results");
+	}
+	roiManager("Deselect");
+	resetThreshold();
+}
+
+macro "make blue Action Tool - C00f O02gf "{
+	run("Properties... ", "stroke=blue");
+	roiManager("Update");
+}
+
+macro "make green Action Tool - C0f0 O02gf "{
+	run("Properties... ", "stroke=green");
+	roiManager("Update");
+}
+
+macro "make red FISH Action Tool - Cf00 O02gf "{
+	run("Properties... ", "stroke=red");
+	roiManager("Update");
+}
+
+macro "make white FISH Action Tool - Cf00 O02gf C0f0 O12gf "{
+	run("Properties... ", "stroke=white");
+	roiManager("Update");
+}
+
+macro "Joes Save XY FISH ROIs Action Tool - C000 T0f09D T6f09o Taf09n Tff09e " {
+	waitForUser("save result ROIs and close all?");
+	
+	//extract dir and basename
+	dir = File.directory ;
+	name = File.name ;
+	baseNameEnd=indexOf(name, " nuclei ROIs.");
+	baseName=substring(name, 0, baseNameEnd);
+	print("filename is" + baseName);
+	
+	//count FISH signals and save result
+	nul = 0;
+	X = 0;
+	Y = 0;
+	XY = 0;
+	N=roiManager("count");
+	for (n=0; n<N ; n++) {
+		roiManager("Select", n);
+		color = getInfo("selection.color");
+		if(color == "blue"){nul = nul +1;}
+		if(color == "red"){X = X +1;}
+		if(color == "green"){Y = Y +1;}
+		if(color == "white"){XY = XY +1;}
+	}
+	selectWindow("Log");
+	run("Close");
+	print(nul + " nul");
+	print(X + " X");
+	print(Y + " Y");
+	print(XY + " XY");
+	selectWindow("Log");
+	saveAs("Text", dir + baseName + " FISH results.txt");
+
+	//save nuclei ROIs
+	roiManager("Save", dir + baseName + " FISH ROIs.zip");
+	print(N + " nuclei ROIs saved");
+
+	//close all
+	run("Close All");
+	selectWindow("ROI Manager");
+	run("Close");
+}

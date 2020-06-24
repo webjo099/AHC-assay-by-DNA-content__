@@ -1,0 +1,285 @@
+macro "Joes nucID Action Tool - C606 O02gf V2477 T0206I " {
+
+	//load image stack
+	path = File.openDialog("Select a .czi image stack file");
+	open(path);
+	Stack.getDimensions(width, height, channels, slices, frames);
+	original = getImageID();
+	dir = File.directory;
+	name_array = split(File.name, ".");
+	name = name_array[0]
+	print("loaded image " + name);
+
+	//set colors to blue green red
+	if (channels > 1) {
+		color_array = newArray("Blue", "Green", "Red");
+		for (i=0; i<channels; i++){
+			Stack.setChannel(i+1);
+			run(color_array[i]);
+			run("Enhance Contrast", "saturated=0.05");
+		}
+		Stack.setDisplayMode("grayscale");
+	}
+
+	//create MIP
+	run("Z Project...", "projection=[Max Intensity]");
+	run("Enhance Contrast", "saturated=0.05");
+	MIP = getImageID();
+
+	//define cyst and save cyst ROI
+	setTool("freehand");
+	waitForUser("Define cyst ROI");
+	roiManager("Add");
+	selectImage(original);
+	roiManager("Select", 0);
+	roiManager("Save", dir+name +" cyst ROI.roi");
+	run("Crop");
+
+	//crop
+	selectImage(MIP);
+	roiManager("Select", 0);
+	run("Crop");
+	roiManager("Add");
+	roiManager("Select", 0);
+	roiManager("Delete");
+
+	//reset minmax to the minmax inside the cyst
+	run("Set Measurements...", "min redirect=None decimal=3");
+	roiManager("Select", 0);
+	roiManager("measure");
+	Min = getResult("Min", 0);
+	Max = getResult("Max", 0);
+	run("Select None");
+	setMinAndMax(Min, Max);
+	run("Apply LUT", "slice");
+	for (j = 2; j <= channels; j++) {
+			Stack.setChannel(j);
+			resetMinAndMax;
+			run("Apply LUT", "slice");
+	}
+	saveAs("Tiff", dir+name +" cyst MIP.tif");
+
+	//remove all channels except the first
+	if (channels > 1){
+		run("Split Channels");
+		for (i=1; i<channels; i++){
+			close();
+		}
+	}
+
+	//identify nuclei and display
+	run("Select None");
+	run("8-bit");
+	//next line is to set background to black in options for processing binary images
+	run("Options...", "iterations=1 count=1 black do=Nothing");
+	run("Auto Local Threshold", "method=Mean radius=15 parameter_1=0 parameter_2=0 white");
+	run("Watershed");
+	roiManager("Select", 0);
+	run("Analyze Particles...", "size=1-25 circularity=0.70-1.00 display exclude add");
+	selectWindow("Results");
+	run("Close");
+
+	//rename ROIs
+	N=roiManager("count");
+
+	for (n=0; n<N ; n++){
+		roiManager("Select", n);
+		ROIname = "a" + n;
+		roiManager("Rename", ROIname);
+	}
+
+	//clean up and display to user for manual correction
+	run("Select None");
+	roiManager("Select", 0);
+	roiManager("Delete");
+	open(dir+name +" cyst MIP.tif");
+	roiManager("Show All");
+	run("Tile");
+	waitForUser("Check ROIs. Delete cyst cell ROIs. Make sure all edits are in ROI manager.");
+
+	//rename ROIs
+	N=roiManager("count");
+	roiManager("List");
+	autoROIs = 1;
+	userROIs = 1;
+
+	for (n=0; n<N ; n++) {
+		for (n=0; n<N ; n++){
+			cur_name = Table.getString("Name", n);
+			if (startsWith(cur_name, "a")){
+				roiManager("Select", n);
+				ROIname = "a"+autoROIs;
+				roiManager("Rename", ROIname);
+				autoROIs = autoROIs+1;
+			}
+			else {
+				roiManager("Select", n);
+				ROIname = "u"+userROIs;
+				roiManager("Rename", ROIname);
+				userROIs = userROIs+1;
+			}
+		}		
+	}
+	selectWindow("Overlay Elements");
+	run("Close");
+
+	//save nuclei ROIs
+	roiManager("Save", dir+name +" nuclei ROIs.zip");
+
+	run("Close All");
+	selectWindow("ROI Manager");
+	run("Close");
+}
+
+macro "Measure DNA content Action Tool - C606 O02gf V2477 T0206M " {
+
+	//ask for file
+	path = File.openDialog("select MIP");
+
+	//extract dir and basename
+	name = File.getName(path);
+	baseNameEnd=indexOf(name, " cyst MIP.tif");
+	baseName=substring(name, 0, baseNameEnd);
+	dir = File.directory();
+
+	//open MIP and nuclei ROIs
+	open(path);
+	open(dir+baseName +" nuclei ROIs.zip");
+
+	//set measurements
+	run("Set Measurements...", "area mean integrated display redirect=None decimal=3");
+
+	//remove ROIs added by user
+	N=roiManager("count");
+	roiManager("List");
+	for (n=0; n<N ; n++) {
+		selectWindow("Overlay Elements");
+		cur_name = Table.getString("Name", n);
+		if (startsWith(cur_name, "u")){
+			roiManager("Select", n);
+			roiManager("Delete");
+			N = N-1;
+			n = n-1;
+		}
+	}
+	selectWindow("Overlay Elements");
+	run("Close");
+
+	//measure ROIs
+	N=roiManager("count");
+	roiManager("Deselect");
+	roiManager("Measure");
+
+	//calculate normalized values and add to results table
+	run("Summarize");
+	Mean_signal =  getResult("RawIntDen", N);
+	for (n=0; n<N ; n++){
+		norm_signal = getResult("RawIntDen", n)/Mean_signal;
+		setResult("norm signal", n, norm_signal);
+	}
+	IJ.deleteRows(N, N+3);
+
+	//save and close everything
+	selectWindow("ROI Manager");
+	updateResults();
+	selectWindow("ROI Manager");
+	run("Close");
+	selectWindow("Results");
+	saveAs("Results", dir+baseName + " DNA content.xls");
+	run("Close");
+	run("Close");
+	exit();
+}
+
+macro "Measure DNA content in subfolders Action Tool - C606 O02gf V2477 T0206M T9206a Td206l Tf206l" {
+
+	//choose directory
+	dir_o=getDirectory("Choose a Directory");
+
+	//code to run in all subfolders
+	listFiles(dir_o);
+
+	function listFiles(dir_o) {
+		list = getFileList(dir_o);
+		for (j=0; j<list.length; j++) {
+			cur_dir = dir_o;
+			if (endsWith(list[j], "/")){
+				cur_dir = dir_o+list[j];
+				print("Searching in " + cur_dir);
+				listFiles(cur_dir);
+				}
+			else if (endsWith(list[j], "cyst MIP.tif")){ 
+				titleInput=list[j];
+				baseNameEnd=indexOf(titleInput, " cyst MIP.tif");
+				baseName=substring(titleInput, 0, baseNameEnd);
+				if (File.exists(cur_dir+baseName+" nuclei ROIs.zip") && !File.exists(cur_dir+baseName+" DNA content.xls")){
+					path = cur_dir+list[j];
+					path = replace(path,"/", File.separator);
+					print("working on " + path);
+					measureDNA(path,cur_dir,baseName);
+				}
+				else if (File.exists(cur_dir+baseName+" nuclei ROIs.zip") && File.exists(cur_dir+baseName+" DNA content.xls")){
+					print(list[j] + " has already been already measure. I will not do that again."); 
+				}
+			}	
+		}
+	}
+				
+	function measureDNA(path,cur_dir,baseName){
+		//open original and create maximum intensity projection and nuclei ROIs
+		open(path);
+		run("Enhance Contrast", "saturated=0.05");
+		MIP = getImageID();
+		//set measurements
+		run("Set Measurements...", "area mean integrated display redirect=None decimal=3");
+		//load ROIs
+		open(cur_dir+baseName +" nuclei ROIs.zip");
+
+		//remove ROIs added by user
+		N=roiManager("count");
+		roiManager("List");
+		for (n=0; n<N ; n++) {
+			selectWindow("Overlay Elements");
+			cur_name = Table.getString("Name", n);
+			if (startsWith(cur_name, "u")){
+				roiManager("Select", n);
+				roiManager("Delete");
+				N = N-1;
+				n = n-1;
+			}
+		}
+		selectWindow("Overlay Elements");
+		run("Close");
+		
+
+		//measure ROIs
+		N=roiManager("count");
+		roiManager("Deselect");
+		roiManager("Measure");
+
+		//calculate normalized values and add to results table
+		run("Summarize");
+		Mean_signal =  getResult("RawIntDen", N);
+		
+		for (n=0; n<N ; n++){
+			norm_signal = getResult("RawIntDen", n)/Mean_signal;
+			setResult("norm signal", n, norm_signal);
+		}
+		IJ.deleteRows(N, N+3);
+
+		//save and close everything
+		selectWindow("ROI Manager");
+		updateResults();
+		selectWindow("ROI Manager");
+		run("Close");
+		selectWindow("Results");
+		saveAs("Results", cur_dir+baseName + " DNA content.xls");
+		run("Close");
+		run("Close");
+		print(baseName + " done");
+	}
+
+	print("done");
+	run("Close All");
+	exit();
+}
